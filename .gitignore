@@ -1,0 +1,13 @@
+terraform/terraform.tfvars
+terraform/*.tfvars
+!terraform/terraform.tfvars.example
+terraform/terraform.tfstate
+terraform/terraform.tfstate.backup
+terraform/*.tfstate
+terraform/.terraform/
+terraform/.terraform.lock.hcl
+terraform/*.tfplan
+scripts/rbac-test-identities.csv
+RBAC_Lab_Report.txt
+NOTES.md
+.DS_Store
