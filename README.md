@@ -73,16 +73,14 @@ I validated this lab two ways: an automated script against live Azure state, and
 ![Auditor viewing FS01 details successfully](screenshots/03-auditor-view-succeeds.png)
 ![Auditor blocked from stopping FS01 with AuthorizationFailed](screenshots/04-auditor-stop-fails.png)
 
-I also checked whether Auditor could view RBAC assignments directly, since that turned out to be a shared permission across roles rather than something unique to Owner. It succeeded, confirming Reader includes the same read-only authorization access most built-in roles do.
-![Auditor successfully listing FS01's role assignments](screenshots/05-auditor-rbac-view.png)
-
 **SupportTech (VM Contributor) test:**
-![SupportTech starting FS01 successfully, and also successfully listing role assignments](screenshots/06-supporttech-start-and-view.png)
+![SupportTech starting FS01 successfully, and also successfully listing role assignments](screenshots/05-supporttech.png)
 
 This was the finding that corrected my original assumption. I expected VM Contributor to be blocked from viewing RBAC entirely. It wasn't. Almost every built-in Azure role includes read-only access to authorization data by default, which is how the Access Control tab works for any user in the portal. VM Contributor can see who has access. It cannot change it.
 
 **SysAdmin (Owner) test — the real proof of Owner's unique power:**
-![SysAdmin successfully creating a new role assignment](screenshots/07-sysadmin-create-role.png)
+![SysAdmin logged in and running the role assignment create command](screenshots/06-sysadmin-login-and-command.png)
+![SysAdmin's role assignment create command succeeding](screenshots/07-sysadmin-create-role.png)
 
 Since viewing RBAC turned out to be common across roles, the actual test that separates Owner from everyone else is a write action. I had SysAdmin create a new role assignment (an extra Reader role for SupportTech), which succeeded. Neither SupportTech nor Auditor could have done this. I removed the extra assignment afterward so FS01's live RBAC state matched exactly what Terraform manages.
 
