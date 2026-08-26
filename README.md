@@ -10,7 +10,7 @@
 
 ## What This Lab Covers
 
-This lab controls who can manage the FS01 virtual machine from Azure, separate from permissions inside Windows. The NTFS configuration controls which departments can access specific folders on the file server. Azure RBAC controls a different layer: who can view, start, stop, delete, reconfigure, or manage access to the FS01 Azure VM resource.
+This lab controls who can manage the FS01 virtual machine from Azure, separate from permissions inside Windows. My previous lab (07 NTFS file server permissions) controlled which departments could access specific folders on the file server. Azure RBAC controls a different layer: who can view, start, stop, delete, reconfigure, or manage access to the FS01 Azure VM resource.
 
 I deployed three role assignments scoped directly to FS01, each tied to a Service Principal representing a different access level:
 
