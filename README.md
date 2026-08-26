@@ -1,121 +1,431 @@
 # 08 Azure RBAC Lab
-Azure RBAC · Service Principals · Terraform · PowerShell · Azure
+
+**Azure RBAC · Service Principals · Terraform · PowerShell · Azure CLI**
 
 ## ▶️ Lab Walkthrough Video
+
 *[Loom link goes here once recorded]*
+
+---
 
 ## What This Lab Covers
 
-This lab controls who can manage the FS01 virtual machine from Azure itself, separate from anything happening inside Windows. Lab 07 controlled which departments could open which folders. This lab controls a different question entirely: who can start, stop, delete, or reconfigure the FS01 server from the Azure side.
+This lab controls who can manage the FS01 virtual machine from Azure, separate from permissions inside Windows. The NTFS configuration controls which departments can access specific folders on the file server. Azure RBAC controls a different layer: who can view, start, stop, delete, reconfigure, or manage access to the FS01 Azure VM resource.
 
-I deployed three role assignments scoped to FS01 only, each one tied to a Service Principal standing in for a real job function: a sysadmin with full control, a support technician who can restart the server but not delete it, and an auditor who can view its status but take no action at all. Terraform reads FS01 as an existing resource rather than creating anything new, and every role assignment is scoped to FS01's exact resource ID so nothing else in the resource group is affected.
+I deployed three role assignments scoped directly to FS01, each tied to a Service Principal representing a different access level:
 
-The goal was to model least privilege at the infrastructure level: each identity gets exactly what its job requires, nothing more, and the enforcement is provable, not assumed.
+* **SysAdmin:** Owner
+* **SupportTech:** Virtual Machine Contributor
+* **Auditor:** Reader
+
+Terraform reads FS01 as an existing resource rather than creating anything new. Every role assignment is scoped to FS01's exact Azure resource ID instead of the resource group, so these assignments do not grant equivalent access to DC01, CLIENT01, or other resources in the resource group.
+
+The lab demonstrates least privilege scoping at the infrastructure level by limiting each assignment to one specific Azure resource. It also demonstrates why the actual permissions contained in an Azure role need to be evaluated rather than assuming its capabilities from the role name alone.
+
+---
 
 ## Focus Areas
 
-| Area | What I did |
+| Area | What I Did |
 |---|---|
-| Azure RBAC | Created 3 role assignments (Owner, VM Contributor, Reader) scoped to a single VM |
-| Identity | Used Service Principals instead of user accounts, since the school tenant restricts new user creation to IT staff |
-| Terraform | Used data sources to read Lab 07's existing FS01 VM without modifying it |
-| Scoping | Pointed every role assignment at FS01's resource ID specifically, not the resource group |
-| Validation | Confirmed the live Azure state directly with the CLI, separate from what Terraform's state file claims |
-| Testing | Logged in as each Service Principal individually to prove enforcement, not just configuration |
-| State management | Reused Lab 07's Terraform state storage account with a separate state file key |
+| **Azure RBAC** | Created three role assignments, Owner, Virtual Machine Contributor, and Reader, scoped to a single VM |
+| **Identity** | Used Service Principals as test identities because the school tenant restricted creation of additional Entra ID users |
+| **Terraform** | Used data sources to reference the existing FS01 VM without creating or managing the VM itself |
+| **Scoping** | Pointed every role assignment directly at FS01's resource ID rather than the resource group |
+| **Validation** | Queried Azure's live RBAC state separately from Terraform state |
+| **Testing** | Authenticated as each Service Principal and tested actual Azure authorization boundaries |
+| **State Management** | Used a separate Terraform state key for the RBAC deployment |
+
+---
 
 ## Architecture
 
 ![Lab 08 architecture diagram - identities, scope, and permission matrix](screenshots/01-diagram.png)
 
-Three Service Principals, each mapped to one role, each scoped to FS01 only:
+Three Service Principals were used as test identities, each mapped to one Azure built-in role and scoped directly to FS01.
 
-- **SysAdmin** — Owner. Full control on FS01, including managing who else has access.
-- **SupportTech** — Virtual Machine Contributor. Can start, stop, and restart FS01. Cannot delete it or touch RBAC.
-- **Auditor** — Reader. Can view FS01's configuration and status. Cannot take any action.
+### SysAdmin: Owner
 
-FS01 itself, along with DC01 and CLIENT01, comes from Lab 07's `RG-FileServerLab`. This lab reads that resource group, it does not deploy into it.
+Full management access to FS01, including:
+
+* View the VM
+* Start, stop, and restart the VM
+* Reconfigure the VM
+* Delete the VM
+* View RBAC assignments
+* Create and remove RBAC assignments
+
+### SupportTech: Virtual Machine Contributor
+
+Can manage the VM's compute resource, including:
+
+* View the VM
+* Start, stop, and restart the VM
+* Reconfigure the VM
+* Delete the VM
+* View RBAC assignments
+
+SupportTech cannot create, modify, or delete Azure RBAC role assignments.
+
+### Auditor: Reader
+
+Read-only access to FS01:
+
+* View the VM and its configuration
+* View RBAC information available through the Reader role
+
+Auditor cannot perform VM management actions or modify RBAC assignments.
+
+FS01, DC01, and CLIENT01 exist inside `RG-FileServerLab`. This RBAC project references the existing resource group and FS01 VM but does not create or manage those resources.
+
+---
+
+## RBAC vs. NTFS
+
+Azure RBAC and NTFS permissions operate at different layers.
+
+| | Azure RBAC | NTFS |
+|---|---|---|
+| **Controls** | Management of Azure resources | Access to files and folders inside Windows |
+| **Enforced by** | Azure Resource Manager | Windows |
+| **Example** | Whether an identity can stop FS01 | Whether a Finance user can open a Finance folder |
+| **Scope in this lab** | FS01 Azure VM resource | File system objects inside FS01 |
+
+A user having access to a folder inside Windows does not automatically give that user permission to manage the VM through Azure. Azure management access also does not automatically determine NTFS file permissions.
+
+---
+
+## Access Model
+
+Each Azure RBAC assignment combines three things: Principal, Role, and Scope.
+
+In this lab: Service Principal, Azure built-in role, and FS01 resource ID.
+
+### FS01 Permission Matrix
+
+| Action | SysAdmin (Owner) | SupportTech (VM Contributor) | Auditor (Reader) |
+|---|:---:|:---:|:---:|
+| View VM | ✅ | ✅ | ✅ |
+| Start / Stop / Restart VM | ✅ | ✅ | ❌ |
+| Manage / Reconfigure VM | ✅ | ✅ | ❌ |
+| Delete VM | ✅ | ✅ | ❌ |
+| View RBAC assignments | ✅ | ✅ | ✅ |
+| Assign / modify RBAC roles | ✅ | ❌ | ❌ |
+
+Virtual Machine Contributor includes broad VM management permissions. This includes deleting the VM and reading Azure authorization information, but it does not grant permission to create, modify, or delete RBAC role assignments.
+
+---
 
 ## Build Stages
 
 ### 1. Confirm Dependencies
-Checked that Lab 07's resource group and FS01 VM exist before doing anything else. RBAC and the VMs are independent Terraform states, but the role assignments are meaningless without a real VM to scope them to.
 
-### 2. Create Identities
-Ran a script that creates three Service Principals through the Azure CLI instead of manually creating user accounts through the portal. This became necessary partway through: the original plan was to create Entra ID user accounts, but the school tenant restricts that to IT staff. Service Principals only need a much lower permission level, and they are arguably the more realistic choice anyway, since real organizations use them for scripted and automated access.
+Confirmed that `RG-FileServerLab` and FS01 existed before deploying RBAC.
 
-### 3. Configure
-Pasted the three Object IDs the script printed into `terraform.tfvars`, along with the resource group and VM names matching Lab 07 exactly.
+The RBAC project has its own Terraform state, but its role assignments depend on the existing FS01 resource because that VM's Azure resource ID is used as their scope.
 
-### 4. Deploy
-Ran `terraform apply` to create the three role assignments. This step is fast, there is no VM to build, just permissions to attach to an existing one.
+---
 
-### 5. Validate
-Ran a separate validation script against the live Azure state, not Terraform's state file. RBAC propagation can lag a few minutes after `apply` completes, so this step confirms the permissions are actually active in Azure, not just that Terraform believes it created them.
+### 2. Create Test Identities
 
-### 6. Test as Each Persona
-Logged in individually as each Service Principal and tried actions specific to their role. A blocked action was the expected, correct result for lower-privilege identities, not a bug.
+The school-managed Azure tenant restricted creation of additional Entra ID users, so three Service Principals were used as test identities.
+
+The Service Principals allowed Azure RBAC assignments and authorization boundaries to be tested without requiring additional human user accounts.
+
+In a production environment, human administrators would normally authenticate with user identities, while Service Principals are commonly used by applications, scripts, automation, and other non-human workloads.
+
+The three Service Principals were:
+
+* SysAdmin
+* SupportTech
+* Auditor
+
+---
+
+### 3. Configure Terraform Variables
+
+The Service Principal creation script returned the Object ID for each identity.
+
+Those Object IDs were added to `terraform.tfvars`:
+
+```hcl
+sysadmin_object_id      = "<SysAdmin Object ID>"
+support_user_object_id  = "<SupportTech Object ID>"
+auditor_object_id       = "<Auditor Object ID>"
+```
+
+The existing resource names were also configured:
+
+```hcl
+resource_group_name = "RG-FileServerLab"
+vm_name             = "FS01"
+```
+
+Azure RBAC role assignments use the Service Principal's Object ID, not its application/client ID.
+
+---
+
+### 4. Reference Existing Infrastructure
+
+Terraform data sources were used to locate the existing resource group and FS01 VM:
+
+```hcl
+data "azurerm_resource_group" "lab" {
+  name = var.resource_group_name
+}
+
+data "azurerm_virtual_machine" "fs01" {
+  name                = var.vm_name
+  resource_group_name = data.azurerm_resource_group.lab.name
+}
+```
+
+The VM data source exposes FS01's Azure resource ID.
+
+That ID becomes the scope for all three role assignments:
+
+```hcl
+scope = data.azurerm_virtual_machine.fs01.id
+```
+
+Because these are data sources, this project references the existing resources without creating or taking Terraform ownership of them.
+
+---
+
+### 5. Deploy RBAC
+
+Terraform created three `azurerm_role_assignment` resources.
+
+Example:
+
+```hcl
+resource "azurerm_role_assignment" "supporttech_vm_contributor" {
+  scope                = data.azurerm_virtual_machine.fs01.id
+  role_definition_name = "Virtual Machine Contributor"
+  principal_id         = var.support_user_object_id
+  principal_type       = "ServicePrincipal"
+}
+```
+
+The same FS01 resource ID was used as the scope for all three assignments.
+
+Deployment:
+
+```bash
+cd terraform
+
+az login
+
+terraform init
+terraform plan
+terraform apply
+```
+
+The Terraform plan showed exactly three resources to add, the three role assignments. No VM, networking, or other infrastructure was created.
+
+---
+
+## Terraform State
+
+The RBAC project uses a separate Terraform state file from the infrastructure it references.
+
+The states are stored in the existing Terraform state storage account using separate state keys.
+
+```hcl
+terraform {
+  backend "azurerm" {
+    resource_group_name  = "RG-TerraformState"
+    storage_account_name = "tfstatentfslab07"
+    container_name       = "tfstate"
+    key                  = "08-rbac.terraform.tfstate"
+  }
+}
+```
+
+This keeps the RBAC deployment's state independent from the Terraform state that owns FS01 and the surrounding infrastructure.
+
+Destroying the RBAC project therefore removes its Terraform-managed role assignments without treating FS01, DC01, CLIENT01, or the surrounding infrastructure as resources owned by this project.
+
+---
 
 ## Automation
 
-The Service Principal creation is handled by `00-create-test-users.ps1`, which creates all three identities in one run and prints their Object IDs ready to paste into `terraform.tfvars`. Validation is handled separately by `validate-lab.ps1`, which queries Azure directly for the live role assignment state and exports a report.
+Two PowerShell scripts supported the lab.
 
-Splitting deployment (Terraform) from validation (a separate script against live Azure state) mirrors how this should work in a real environment: infrastructure-as-code creates the configuration, but a real audit or compliance check confirms what is actually enforced.
+### `00-create-test-users.ps1`
+
+Creates the three Service Principals through the Azure CLI and retrieves the Object IDs required by Terraform.
+
+The script also stores the credentials locally in a Git-ignored file so secrets are not committed to the repository.
+
+### `validate-lab.ps1`
+
+Queries Azure directly after deployment to verify the live RBAC assignments on FS01.
+
+This separates two different questions: what resources did the infrastructure-as-code deployment create, versus what role assignments currently exist on FS01 in Azure right now.
+
+RBAC changes can take time to propagate, so querying Azure directly provides an independent check of the deployed state.
+
+---
 
 ## Verification
 
-I validated this lab two ways: an automated script against live Azure state, and manual testing by logging in as each Service Principal directly.
+The lab was verified in two ways: automated validation of the live Azure RBAC state, and functional authorization testing while authenticated as each Service Principal.
 
-**Validation:**
+### Validation
+
+`validate-lab.ps1` queried the live role assignments on FS01 and confirmed:
+
+* SysAdmin: Owner
+* SupportTech: Virtual Machine Contributor
+* Auditor: Reader
+
+All three assignments were found at the expected FS01 scope.
+
 ![Validation script output, all 3 role assignments PASS](screenshots/02-validate-lab-output.png)
 
-**Auditor (Reader) test:**
+---
+
+### Auditor: Reader
+
+Authenticated as the Auditor Service Principal.
+
+Viewing FS01 succeeded:
+
+```bash
+az vm show --resource-group RG-FileServerLab --name FS01
+```
+
+Attempting to stop FS01 failed:
+
+```bash
+az vm stop --resource-group RG-FileServerLab --name FS01
+```
+
+Azure returned `AuthorizationFailed`. This confirmed that Reader could retrieve information about FS01 but could not perform VM management actions.
+
 ![Auditor viewing FS01 details successfully](screenshots/03-auditor-view-succeeds.png)
 ![Auditor blocked from stopping FS01 with AuthorizationFailed](screenshots/04-auditor-stop-fails.png)
 
-**SupportTech (VM Contributor) test:**
+---
+
+### SupportTech: Virtual Machine Contributor
+
+Authenticated as the SupportTech Service Principal.
+
+Starting FS01 succeeded:
+
+```bash
+az vm start --resource-group RG-FileServerLab --name FS01
+```
+
+SupportTech was also able to list the role assignments scoped to FS01. This is expected because Virtual Machine Contributor includes read access to Azure authorization information. SupportTech could therefore view who had access to FS01 but did not have permission to create, modify, or delete those RBAC assignments.
+
 ![SupportTech starting FS01 successfully, and also successfully listing role assignments](screenshots/05-supporttech.png)
 
-This was the finding that corrected my original assumption. I expected VM Contributor to be blocked from viewing RBAC entirely. It wasn't. Almost every built-in Azure role includes read-only access to authorization data by default, which is how the Access Control tab works for any user in the portal. VM Contributor can see who has access. It cannot change it.
+---
 
-**SysAdmin (Owner) test — the real proof of Owner's unique power:**
+### SysAdmin: Owner
+
+Authenticated as the SysAdmin Service Principal.
+
+To test RBAC write access, SysAdmin created an additional temporary Reader assignment for SupportTech on FS01.
+
+```bash
+az role assignment create --assignee-object-id "<SupportTech Object ID>" --role "Reader" --scope "<FS01 Resource ID>"
+```
+
+The assignment succeeded. Among the three roles assigned in this lab, Owner was the only one with permission to create and remove role assignments.
+
+The temporary Reader assignment was then deleted. The live RBAC state was checked again to confirm that only the Terraform-managed assignments remained.
+
 ![SysAdmin logged in and running the role assignment create command](screenshots/06-sysadmin-login-and-command.png)
 ![SysAdmin's role assignment create command succeeding](screenshots/07-sysadmin-create-role.png)
 
-Since viewing RBAC turned out to be common across roles, the actual test that separates Owner from everyone else is a write action. I had SysAdmin create a new role assignment (an extra Reader role for SupportTech), which succeeded. Neither SupportTech nor Auditor could have done this. I removed the extra assignment afterward so FS01's live RBAC state matched exactly what Terraform manages.
+---
 
 ## Security Decisions
 
-A few design choices were intentional:
+Several controls were built into the lab intentionally:
 
-- Each role assignment is scoped to FS01's specific resource ID, not the resource group, so DC01 and CLIENT01 are unaffected.
-- Service Principals were used instead of standing up real user accounts, avoiding unnecessary identities in the tenant.
-- `terraform.tfvars` and the Service Principal credentials file are excluded from Git.
-- Validation runs against live Azure state rather than trusting Terraform's state file alone.
-- Terraform state for this lab uses its own key in the same storage account as Lab 07, keeping the two labs' state fully independent.
+* **Resource-level RBAC scope:** Assignments were applied directly to FS01 instead of `RG-FileServerLab` or the subscription.
+* **Separate Terraform state:** The RBAC deployment uses its own state key.
+* **Explicit identity inputs:** Service Principal Object IDs are provided explicitly to Terraform.
+* **Secrets excluded from Git:** `terraform.tfvars`, Service Principal credentials, Terraform state, and other sensitive files are ignored.
+* **Independent validation:** Live Azure state is queried separately from Terraform.
+* **Temporary manual RBAC changes removed:** The role assignment created during testing was deleted afterward so Azure's live configuration returned to the Terraform-managed state.
 
-## What I Learned
-
-The biggest takeaway was the difference between what a role's name implies and what it actually grants. I assumed Virtual Machine Contributor would be blocked from RBAC entirely, since the role name only mentions VMs. In reality, almost every built-in Azure role includes read-only access to authorization data, because that is what powers the Access Control tab in the portal for any signed-in user. Viewing permissions and managing permissions are two separate levels, and only testing the actual commands against live Azure revealed that. A role's description is a summary, not the full permission set.
-
-I also ran into a real-world identity constraint that the original lab plan did not account for. School and organization tenants restrict new user account creation to IT staff, which meant the planned approach of creating three Entra ID test users was not something a student account could do. Switching to Service Principals solved it, and it turned out to be a more accurate model anyway, since organizations commonly use Service Principals for scripted and automated access rather than standing up fake human accounts for every test scenario.
-
-Scoping mattered more than I expected going in. Pointing every role assignment at FS01's specific resource ID, rather than the resource group, meant DC01 and CLIENT01 were never touched. That is the actual mechanism behind the principle of least privilege, not just a policy statement.
-
-## What I'd Do Differently
-
-I would write the validation script to test a write action from the start, not just visibility. My first pass at testing SupportTech only checked whether it could view RBAC assignments, which led to a result that looked like a failure until I understood why it actually succeeded. Testing an actual create or delete action against RBAC from the beginning, the way I eventually did for SysAdmin, would have caught the real distinction (view vs. manage) without the detour.
-
-I would also build the Service Principal credential handling with automatic cleanup in mind. I manually removed the extra role assignment SysAdmin created during testing, but a script that logs its own test actions and reverses them automatically would make repeat runs of this lab faster and less error-prone.
+---
 
 ## Troubleshooting
 
 | Problem | Cause | Fix |
 |---|---|---|
-| `Set-ExecutionPolicy` error on script run | That cmdlet is Windows-only and does not exist on Linux PowerShell | Removed the line, it is unnecessary on this platform |
-| Service Principal / user creation fails with a permissions warning | School tenant restricts new user creation to IT staff | Switched from Entra ID user accounts to Service Principals, which need a lower permission level |
-| `terraform plan` finds no configuration | Ran the command from the project root instead of the `terraform/` subfolder | `cd terraform` before running `init` or `plan` |
-| `az vm list` shows no status column | Basic `az vm list` does not include power state by default | Added the `-d` flag to include live VM status |
+| `Set-ExecutionPolicy` error | `Set-ExecutionPolicy` is not available in PowerShell on Linux | Removed the command |
+| Entra ID user creation failed | School tenant restricted creation of additional users | Used Service Principals as test identities |
+| `terraform plan` found no configuration | Terraform command was run from the project root rather than the `terraform/` directory | Ran `cd terraform` first |
+| `az vm list` did not show power state | Basic `az vm list` does not retrieve instance-view status | Added the `-d` flag |
+| App ID used instead of Object ID | Service Principals expose multiple identifiers, but the role assignment requires the principal's Object ID | Retrieved and used the Service Principal Object ID |
+| `az role assignment delete` rejected `--assignee-principal-type` | The argument is supported for role assignment creation but not deletion | Removed the unsupported argument and used the assignee Object ID |
+| `.gitignore` patterns using `../` failed | Git ignore patterns do not traverse outside the directory containing the `.gitignore` | Moved repository-wide exclusions to the root `.gitignore` |
+| `terraform destroy` required backend initialization | The local Terraform working directory needed to reconnect to its configured backend | Ran `terraform init -reconfigure` |
+| Destroy prompted for `admin_password` | Terraform still evaluates required input variables during destroy | Supplied a temporary value satisfying the variable validation rules |
+
+---
+
+## Teardown
+
+The RBAC role assignments were destroyed before the infrastructure they referenced.
+
+### Remove RBAC Assignments
+
+```bash
+cd 08-rbac/terraform
+terraform destroy
+```
+
+This removes the three Terraform-managed role assignments.
+
+### Remove Infrastructure
+
+```bash
+cd ../../07-ntfs-file-server/terraform
+
+terraform init -reconfigure
+terraform destroy
+```
+
+After teardown, Azure was checked to confirm that the lab resource group had been removed while the Terraform state infrastructure remained.
+
+---
 
 ## Tools & Technologies
-Azure · Azure RBAC · Microsoft Entra ID · Service Principals · Terraform · Azure CLI · PowerShell · Windows Server 2022
+
+* Microsoft Azure
+* Azure RBAC
+* Microsoft Entra ID
+* Service Principals
+* Terraform
+* AzureRM Provider
+* Azure CLI
+* PowerShell
+* Windows Server 2022
+* Azure Blob Storage
+
+---
+
+## Key Technical Concepts Demonstrated
+
+* Azure Resource Manager control-plane authorization
+* Azure RBAC built-in roles
+* Resource-level role assignment scoping
+* Owner vs. Virtual Machine Contributor vs. Reader
+* RBAC read permissions vs. RBAC write permissions
+* Service Principal authentication
+* Service Principal Object IDs vs. application/client IDs
+* Terraform data sources
+* Terraform remote state separation
+* Live-state validation
+* Positive and negative authorization testing
+* Infrastructure-as-code state reconciliation
+* Least-privilege scoping
