@@ -2,9 +2,9 @@
 
 **Azure RBAC · Service Principals · Terraform · PowerShell · Azure CLI**
 
-## ▶️ Lab Walkthrough Video
+---
 
-*[Loom link goes here once recorded]*
+## [▶️ Lab Walkthrough Video] (https://www.loom.com/share/710773dbc9794ff68730777eba2e1b85)
 
 ---
 
